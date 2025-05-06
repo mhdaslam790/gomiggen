@@ -270,8 +270,9 @@ func handleAddColumn(model string, columns ...string) {
 		structFields = append(structFields, fmt.Sprintf("		%s %s%s %s", field.Name, field.Type, tag, field.Comment))
 
 		// Add migration commands to add and drop the column
-		addCalls = append(addCalls, fmt.Sprintf(`		if err := tx.Migrator().AddColumn(%s{}, "%s"); err != nil { return err }`, model, field.Name))
-		dropCalls = append(dropCalls, fmt.Sprintf(`		if err := tx.Migrator().DropColumn(&%s{}, "%s"); err != nil { return err }`, model, field.Name))
+		snakCaseFieldName := toSnakeCase(field.Name)
+		addCalls = append(addCalls, fmt.Sprintf(`		if err := tx.Migrator().AddColumn(%s{}, "%s"); err != nil { return err }`, model, snakCaseFieldName))
+		dropCalls = append(dropCalls, fmt.Sprintf(`		if err := tx.Migrator().DropColumn(&%s{}, "%s"); err != nil { return err }`, model, snakCaseFieldName))
 	}
 
 	// 🔧 1. Update migration.go
@@ -358,9 +359,10 @@ func handleAddIndex(model, col string) {
 		fmt.Printf("❌ Model '%s' not found in model directory.\n", model)
 		return
 	}
+	snakeCaseColumn := toSnakeCase(col)
+
 	table := toSnakeCase(model) + "s"
-	idx := "idx_" + col
-	lowerCaseColumn := strings.ToLower(col)
+	idx := "idx_" + snakeCaseColumn
 
 	migrationDir := "migration"
 	migrationGo := filepath.Join(migrationDir, "migration.go")
@@ -370,7 +372,7 @@ func handleAddIndex(model, col string) {
 		fmt.Println("❌ Failed to read model directory: ", err)
 		return
 	}
-	stringPattern := fmt.Sprintf("CREATE INDEX %s ON %s (%s)", idx, table, lowerCaseColumn)
+	stringPattern := fmt.Sprintf("CREATE INDEX %s ON %s (%s)", idx, table, snakeCaseColumn)
 	if strings.Contains(string(data), stringPattern) {
 		fmt.Printf("❌ Index already exist for %s the on %s", table, col)
 		return
@@ -390,7 +392,7 @@ func handleAddIndex(model, col string) {
 		"Timestamp": timestamp(),
 		"Table":     table,
 		"Index":     idx,
-		"Col":       lowerCaseColumn,
+		"Col":       snakeCaseColumn,
 	})
 	writeMigration(sb.String())
 
