@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+type Field struct {
+	Name    string
+	Type    string
+	GormTag string
+	Comment string
+}
+
 func toSnakeCase(str string) string {
 	var result []rune
 	for i, r := range str {
@@ -152,7 +159,7 @@ func handleCreateModel(structName string) {
 
 	modelCode := fmt.Sprintf(`package model
 
-type %s struct {
+	type %s struct {
 	ID uint `+"`gorm:\"primaryKey\"`"+`
 	}
 `, structName)
@@ -346,8 +353,28 @@ func handleDropColumn(model string, colNames ...string) {
 }
 
 func handleAddIndex(model, col string) {
+
+	if !modelExists(model) {
+		fmt.Printf("❌ Model '%s' not found in model directory.\n", model)
+		return
+	}
 	table := toSnakeCase(model) + "s"
 	idx := "idx_" + col
+	lowerCaseColumn := strings.ToLower(col)
+
+	migrationDir := "migration"
+	migrationGo := filepath.Join(migrationDir, "migration.go")
+	data, err := os.ReadFile(migrationGo)
+
+	if err != nil {
+		fmt.Println("❌ Failed to read model directory: ", err)
+		return
+	}
+	stringPattern := fmt.Sprintf("CREATE INDEX %s ON %s (%s)", idx, table, lowerCaseColumn)
+	if strings.Contains(string(data), stringPattern) {
+		fmt.Printf("❌ Index already exist for %s the on %s", table, col)
+		return
+	}
 	tmpl := `{
 				ID: "{{.Timestamp}}",
 				Migrate: func(tx *gorm.DB) error {
@@ -363,9 +390,45 @@ func handleAddIndex(model, col string) {
 		"Timestamp": timestamp(),
 		"Table":     table,
 		"Index":     idx,
-		"Col":       col,
+		"Col":       lowerCaseColumn,
 	})
 	writeMigration(sb.String())
+
+	// Insert index into the table
+	modelDir := "model"
+	fileName := fmt.Sprintf("%s.go", model)
+	modelGo := filepath.Join(modelDir, fileName)
+	modelData, err := os.ReadFile(modelGo)
+	if err != nil {
+		fmt.Printf("❌ Model '%s' not found in the directory", modelGo)
+		return
+	}
+
+	lines := strings.Split(string(modelData), "\n")
+	updated := []string{}
+	var fieldFound bool = false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, col+" ") && !strings.Contains(line, "struct") {
+			if strings.Contains(line, "`gorm:\"") {
+				line = strings.Replace(line, "`gorm:\"", "`gorm:\"index;", 1)
+			} else {
+				line = strings.Replace(line, col, fmt.Sprintf("%s %s `gorm:\"index;\"`", col, strings.Split(trimmed, " ")[1]), 1)
+			}
+			fieldFound = true
+		}
+		updated = append(updated, line)
+	}
+	if fieldFound {
+		err = os.WriteFile(modelGo, []byte(strings.Join(updated, "\n")), 0644)
+		if err != nil {
+			fmt.Printf("❌ Failed to write updated model: %v\n", err)
+			return
+		}
+		fmt.Printf("✅ Index tag added to column '%s' in model '%s'\n", col, model)
+	} else {
+		fmt.Printf("⚠️ Field '%s' not found in model '%s'. No changes made to struct.\n", col, model)
+	}
 }
 
 func handleDropIndex(model, col string) {
@@ -389,13 +452,6 @@ func handleDropIndex(model, col string) {
 		"Col":       col,
 	})
 	writeMigration(sb.String())
-}
-
-type Field struct {
-	Name    string
-	Type    string
-	GormTag string
-	Comment string
 }
 
 func updateModelStruct(structName string, fields []Field) {
@@ -425,7 +481,7 @@ func updateModelStruct(structName string, fields []Field) {
 							if f.GormTag != "" {
 								updated = append(updated, fmt.Sprintf("	%s %s `gorm:\"%s\"` // Added %s", f.Name, f.Type, f.GormTag, time.Now().Format("2006-01-02 15:04")))
 							} else {
-								updated = append(updated, fmt.Sprintf("	%s %s // Added %s", f.Name, f.Type, time.Now().Format("2006-01-02 15:04")))
+								updated = append(updated, fmt.Sprintf("	%s %s // Added %s", (f.Name), f.Type, time.Now().Format("2006-01-02 15:04")))
 							}
 						}
 						inserted = true
