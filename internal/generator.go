@@ -148,33 +148,35 @@ func writeMigration(content string) {
 	fmt.Println("✅ Migration entry inserted.")
 }
 
-func handleCreateModel(structName string) {
+func handleCreateModel(structName string, ) {
 	timeStr := timestamp()
 	fileBase := toSnakeCase(structName)
 	modelDir := filepath.Join("model")
 	os.MkdirAll(modelDir, os.ModePerm)
 
-	modelPath := filepath.Join(modelDir, timeStr+"_"+fileBase+".go")
+	modelPath := filepath.Join(modelDir, fileBase+".go")
+	
 	modelCode := fmt.Sprintf(`package model
 
 type %s struct {
 	ID uint `+"`gorm:\"primaryKey\"`"+`
-	// Add your fields here
-}
+	}
 `, structName)
+
 	os.WriteFile(modelPath, []byte(modelCode), 0644)
 	fmt.Println("✅ Model created:", modelPath)
 
-	// Step 1: Add migration block
+	// Generate migration
 	tmpl := `{
-ID: "{{.Timestamp}}",
-Migrate: func(tx *gorm.DB) error {
-	return tx.Migrator().CreateTable(&model.{{.StructName}}{})
-},
-Rollback: func(tx *gorm.DB) error {
-	return tx.Migrator().DropTable("{{.TableName}}")
-},
-},`
+			ID: "{{.Timestamp}}",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Migrator().CreateTable(&model.{{.StructName}}{})
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Migrator().DropTable("{{.TableName}}")
+			},
+			},`
+
 	t := template.Must(template.New("mig").Parse(tmpl))
 	var sb strings.Builder
 	t.Execute(&sb, map[string]string{
@@ -183,85 +185,140 @@ Rollback: func(tx *gorm.DB) error {
 		"TableName":  fileBase + "s",
 	})
 	writeMigration(sb.String())
-
-	// Step 2: Add model to getModels()
-	migPath := filepath.Join("migration", "migration.go")
-	data, err := os.ReadFile(migPath)
-	if err != nil {
-		panic(err)
-	}
-
-	// Find the line with `return []interface{}{`
-	insertLine := "&model." + structName + "{},"
-	lines := strings.Split(string(data), "\n")
-	var modified []string
-	inserted := false
-	for _, line := range lines {
-		modified = append(modified, line)
-		if !inserted && strings.TrimSpace(line) == "return []interface{}{" {
-			modified = append(modified, "\t\t"+insertLine)
-			inserted = true
-		}
-	}
-
-	if inserted {
-		err := os.WriteFile(migPath, []byte(strings.Join(modified, "\n")), 0644)
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println("✅ Model added to AutoMigrate:", insertLine)
-	} else {
-		fmt.Println("⚠️ Could not find getModels() to insert AutoMigrate line")
-	}
 }
 
-func handleAddColumn(model, colType string) {
-	parts := strings.SplitN(colType, ":", 2)
-	colName := parts[0]
-	typeGo := "string"
-	if len(parts) > 1 {
-		typeGo = parts[1]
+func handleAddColumn(model string, columns ...string) {
+	if len(columns) == 0 {
+		fmt.Println("❌ No column(s) specified.")
+		return
 	}
+
+	if !modelExists(model) {
+		fmt.Printf("❌ Model '%s' not found in model directory.\n", model)
+		return
+	}
+
+	timeStr := timestamp()
+	now := time.Now().Format("2006-01-02 15:04")
+	var structFields []string
+	var addCalls []string
+	var dropCalls []string
+	var fields []Field
+	firstCol := ""
+
+	// Process each column provided
+	for i, col := range columns {
+		// Split column into name and type (and optionally the GORM tag)
+		parts := strings.SplitN(col, ":", 3)
+
+		// Default to string type if no type is provided
+		field := Field{
+			Name:    parts[0],
+			Type:    parts[1],
+			Comment: "// Added " + now,
+		}
+
+		// If a GORM tag is provided
+		if len(parts) == 3 {
+			field.GormTag = parts[2]
+		}
+
+		// Set the first column name for the migration
+		if i == 0 {
+			firstCol = field.Name
+		}
+
+		// Add the field to the list
+		fields = append(fields, field)
+
+		// Struct line for migration (considering GORM tag if present)
+		tag := ""
+		if field.GormTag != "" {
+			tag = fmt.Sprintf(" `gorm:\"%s\"`", field.GormTag)
+		}
+
+		// Add this field to the struct definition
+		structFields = append(structFields, fmt.Sprintf("		%s %s%s %s", field.Name, field.Type, tag, field.Comment))
+
+		// Add migration commands to add and drop the column
+		addCalls = append(addCalls, fmt.Sprintf(`		if err := tx.Migrator().AddColumn(%s{}, "%s"); err != nil { return err }`, model, field.Name))
+		dropCalls = append(dropCalls, fmt.Sprintf(`		if err := tx.Migrator().DropColumn(&%s{}, "%s"); err != nil { return err }`, model, field.Name))
+	}
+
+	// 🔧 1. Update migration.go
 	tmpl := `{
-ID: "{{.Timestamp}}",
-Migrate: func(tx *gorm.DB) error {
-	type T struct {
-		{{.ColName}} {{.ColType}}
-	}
-	return tx.Migrator().AddColumn(&model.{{.Model}}{}, "{{.ColName}}")
-},
-Rollback: func(tx *gorm.DB) error {
-	return tx.Migrator().DropColumn(&model.{{.Model}}{}, "{{.ColName}}")
-},
-},`
+				ID: "{{.Timestamp}}",
+				Migrate: func(tx *gorm.DB) error {
+					type {{.Model}} struct {
+			{{.StructFields}}
+					}
+			{{.AddCalls}}
+					return nil
+				},
+				Rollback: func(tx *gorm.DB) error {
+				type {{.Model}} struct {
+			{{.StructFields}}
+					}
+			{{.DropCalls}}
+					return nil
+				},
+			},`
 	t := template.Must(template.New("mig").Parse(tmpl))
 	var sb strings.Builder
 	t.Execute(&sb, map[string]string{
-		"Timestamp": timestamp(),
-		"Model":     model,
-		"ColName":   colName,
-		"ColType":   typeGo,
+		"Timestamp":    timeStr,
+		"Model":        model,
+		"FirstCol":     firstCol,
+		"StructFields": strings.Join(structFields, "\n"),
+		"AddCalls":     strings.Join(addCalls, "\n"),
+		"DropCalls":    strings.Join(dropCalls, "\n"),
 	})
 	writeMigration(sb.String())
+
+	// 🏗️ 2. Update actual model file
+	updateModelStruct(model, fields)
+
+	fmt.Printf("✅ Added column '%s' to model '%s'.\n", structFields, model)
+	fmt.Println("✅ Migration and model updated.")
 }
 
-func handleDropColumn(model, colName string) {
+func handleDropColumn(model string, colNames ...string) {
+	if len(colNames) == 0 {
+		fmt.Println("❌ No columns specified to drop.")
+		return
+	}
+
+	var rollback []string
+	for _, col := range colNames {
+		rollback = append(rollback, fmt.Sprintf(`		// Re-add column %s manually if needed`, col))
+	}
+
 	tmpl := `{
-ID: "{{.Timestamp}}",
-Migrate: func(tx *gorm.DB) error {
-	return tx.Migrator().DropColumn(&model.{{.Model}}{}, "{{.ColName}}")
-},
-Rollback: func(tx *gorm.DB) error {
-	// You may need to re-add the column manually
-	return nil
-},
-},`
+			ID: "{{.Timestamp}}",
+			Migrate: func(tx *gorm.DB) error {
+			{{.DropLines}}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+			{{.Rollback}}
+				return nil
+			},
+			},`
+
+	var dropLines string
+	for _, col := range colNames {
+		dropLines += fmt.Sprintf(`		if err := tx.Migrator().DropColumn(&model.%s{}, "%s"); err != nil {
+		return err
+	}
+`, model, col)
+	}
+
 	t := template.Must(template.New("mig").Parse(tmpl))
 	var sb strings.Builder
 	t.Execute(&sb, map[string]string{
 		"Timestamp": timestamp(),
-		"Model":     model,
-		"ColName":   colName,
+		"DropLines": dropLines,
+		"Rollback":  strings.Join(rollback, "\n"),
 	})
 	writeMigration(sb.String())
 }
@@ -310,4 +367,70 @@ func handleDropIndex(model, col string) {
 		"Col":       col,
 	})
 	writeMigration(sb.String())
+}
+
+type Field struct {
+	Name    string
+	Type    string
+	GormTag string
+	Comment string
+}
+
+func updateModelStruct(structName string, fields []Field) {
+	modelDir := "model"
+	files, err := os.ReadDir(modelDir)
+	if err != nil {
+		fmt.Println("❌ Failed to read model directory:", err)
+		return
+	}
+
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".go") {
+			path := filepath.Join(modelDir, file.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			content := string(data)
+			if strings.Contains(content, fmt.Sprintf("type %s struct {", structName)) {
+				lines := strings.Split(content, "\n")
+				var updated []string
+				inserted := false
+				for _, line := range lines {
+					updated = append(updated, line)
+					if strings.Contains(line, fmt.Sprintf("type %s struct {", structName)) && !inserted {
+						for _, f := range fields {
+							if f.GormTag != "" {
+								updated = append(updated, fmt.Sprintf("	%s %s `gorm:\"%s\"` // Added %s", f.Name, f.Type, f.GormTag, time.Now().Format("2006-01-02 15:04")))
+							} else {
+								updated = append(updated, fmt.Sprintf("	%s %s // Added %s", f.Name, f.Type, time.Now().Format("2006-01-02 15:04")))
+							}
+						}
+						inserted = true
+					}
+				}
+				os.WriteFile(path, []byte(strings.Join(updated, "\n")), 0644)
+				fmt.Println("✅ Model updated:", path)
+				return
+			}
+		}
+	}
+	fmt.Println("❌ Model struct not found:", structName)
+}
+
+func modelExists(structName string) bool {
+	modelDir := "model"
+	files, err := os.ReadDir(modelDir)
+	if err != nil {
+		return false
+	}
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".go") {
+			content, err := os.ReadFile(filepath.Join(modelDir, file.Name()))
+			if err == nil && strings.Contains(string(content), fmt.Sprintf("type %s struct {", structName)) {
+				return true
+			}
+		}
+	}
+	return false
 }

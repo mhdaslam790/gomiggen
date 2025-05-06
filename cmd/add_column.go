@@ -13,4 +13,3 @@ var addColumnCmd = &cobra.Command{
 		internal.HandleAction([]string{"add-column", args[0], args[1]})
 	},
 }
-
