@@ -100,7 +100,7 @@ func writeMigration(content string) {
 		
 			m.InitSchema(func(tx *gorm.DB) error {
 				err := tx.AutoMigrate(
-					getModels()...,
+
 				)
 				if err != nil {
 					log.Fatal(err)
@@ -114,12 +114,6 @@ func writeMigration(content string) {
 			log.Println("Migration did run successfully")
 		}
 		
-		func getModels() []interface{} {
-			return []interface{}{
-				// &model.User{},
-				// Add other models here
-			}
-		}
 		`
 
 		err = os.WriteFile(migrationGo, []byte(initialContent), 0644)
@@ -148,14 +142,14 @@ func writeMigration(content string) {
 	fmt.Println("✅ Migration entry inserted.")
 }
 
-func handleCreateModel(structName string, ) {
-	timeStr := timestamp()
+func handleCreateModel(structName string) {
+	timeStr := time.Now().Format("20060102150405") // Updated to include seconds
 	fileBase := toSnakeCase(structName)
 	modelDir := filepath.Join("model")
 	os.MkdirAll(modelDir, os.ModePerm)
 
 	modelPath := filepath.Join(modelDir, fileBase+".go")
-	
+
 	modelCode := fmt.Sprintf(`package model
 
 type %s struct {
@@ -184,7 +178,35 @@ type %s struct {
 		"StructName": structName,
 		"TableName":  fileBase + "s",
 	})
+
 	writeMigration(sb.String())
+	inserInitSchema(structName)
+}
+func inserInitSchema(structName string) {
+	tmpl := `&model.{{.StructName}}{},`
+	t := template.Must(template.New("mig").Parse(tmpl))
+	var sb strings.Builder
+	t.Execute(&sb, map[string]string{
+		"StructName": structName,
+	})
+	migrationDir := "migration"
+	migrationGo := filepath.Join(migrationDir, "migration.go")
+	data, err := os.ReadFile(migrationGo)
+	if err != nil {
+		panic(err)
+	}
+	insertAfter := "tx.AutoMigrate("
+	idx := strings.Index(string(data), insertAfter)
+	if idx == -1 {
+		panic("Could not find the implementation of AutoMigration")
+	}
+	insertPos := idx + len(insertAfter)
+	updated := string(data[:insertPos]) + "\n\t\t\t\t" + sb.String() + string(data[insertPos:])
+	err = os.WriteFile(migrationGo, []byte(updated), 0644)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("✅Auto migration entry inserted")
 }
 
 func handleAddColumn(model string, columns ...string) {

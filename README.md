@@ -63,12 +63,12 @@ gomiggen generate <command> <ModelName> [args...]
 ### Available Commands
 
 | Command        | Example                                             | Description                           |
-|----------------|--------------------------------------------|---------------------------------------|
-| `create`       | `gomiggen create User`                     | Create a model + CreateTable migration |
-| `add-column`   | `gomiggen add-column User age:int`         | Add a column + migration              |
-| `drop-column`  | `gomiggen drop-column User age`            | Drop a column + rollback              |
-| `add-index`    | `gomiggen add-index User email`            | Create index on column                |
-| `drop-index`   | `gomiggen drop-index User email`           | Drop index from column                |
+|----------------|-----------------------------------------------------|---------------------------------------|
+| `create`       | `gomiggen create User`                              | Create a model + CreateTable migration |
+| `add-column`   | `gomiggen add-column User Name:string:"column:Name;size:255;not null"`         | Add a column + migration              |
+| `drop-column`  | `gomiggen drop-column User age`                      | Drop a column + rollback              |
+| `add-index`    | `gomiggen add-index User email`                      | Create index on column                |
+| `drop-index`   | `gomiggen drop-index User email`                     | Drop index from column                |
 
 ---
 
@@ -80,13 +80,13 @@ When you run `gomiggen generate add-column User age:int`, the following code is 
 {
 	ID: "202505051245",
 	Migrate: func(tx *gorm.DB) error {
-		type T struct {
+		type User struct {
 			Age int
 		}
-		return tx.Migrator().AddColumn(&model.User{}, "Age")
+		return tx.Migrator().AddColumn(User{}, "Age")
 	},
 	Rollback: func(tx *gorm.DB) error {
-		return tx.Migrator().DropColumn(&model.User{}, "Age")
+		return tx.Migrator().DropColumn(User{}, "Age")
 	},
 },
 ```
