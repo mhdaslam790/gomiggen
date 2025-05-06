@@ -114,7 +114,9 @@ func NewMigration(db *gorm.DB) {
 	})
 
 	m.InitSchema(func(tx *gorm.DB) error {
-		return tx.AutoMigrate(getModels()...)
+		return tx.AutoMigrate(
+			// generated models inserted here for initSchema
+		)
 	})
 
 	if err := m.Migrate(); err != nil {
@@ -123,11 +125,7 @@ func NewMigration(db *gorm.DB) {
 	log.Println("Migration ran successfully")
 }
 
-func getModels() []interface{} {
-	return []interface{}{
-		&model.User{},
-	}
-}
+
 ```
 
 As you generate more models, they are automatically added to `getModels()`.
