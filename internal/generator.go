@@ -157,12 +157,17 @@ func handleCreateModel(structName string) {
 
 	modelPath := filepath.Join(modelDir, fileBase+".go")
 
-	modelCode := fmt.Sprintf(`package model
+	modelCode := fmt.Sprintf(
+	`package model
+
+	import "time"
 
 	type %s struct {
 	ID uint `+"`gorm:\"primaryKey\"`"+`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 	}
-`, structName)
+		`, structName)
 
 	os.WriteFile(modelPath, []byte(modelCode), 0644)
 	fmt.Println("✅ Model created:", modelPath)
